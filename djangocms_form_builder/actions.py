@@ -357,3 +357,147 @@ if apps.is_installed("djangocms_link"):
             form.Meta.options["redirect"] = get_link(
                 self.get_parameter(form, "redirect_link")
             )
+
+
+try:
+    import requests  # noqa: F401 - optional dependency, see [webhook] extra
+
+    _has_requests = True
+except ModuleNotFoundError:
+    _has_requests = False
+
+
+if _has_requests:
+    from .webhook_models import WebhookConfiguration, WebhookSubmission
+
+    @register
+    class WebhookAction(FormAction):
+        """Send each submission to a configured webhook endpoint.
+
+        Deliveries are queued and processed asynchronously with retry logic and
+        per-attempt logging. Endpoints are managed as ``Webhook configuration``
+        objects in the admin. Requires the optional ``requests`` dependency
+        (install ``djangocms-form-builder[webhook]``).
+        """
+
+        verbose_name = _("Submit to webhook")
+
+        class Meta:
+            entangled_fields = {
+                "action_parameters": [
+                    "webhook_config",
+                    "include_user_agent",
+                    "include_referer",
+                    "custom_metadata",
+                ]
+            }
+
+        webhook_config = forms.ModelChoiceField(
+            queryset=WebhookConfiguration.objects.filter(active=True),
+            label=_("Webhook configuration"),
+            required=False,
+            empty_label=_("Select webhook configuration..."),
+            help_text=_("Choose the webhook configuration to use for this form."),
+        )
+        include_user_agent = forms.BooleanField(
+            label=_("Include user agent"),
+            required=False,
+            initial=True,
+            help_text=_("Include the user's browser information in the payload."),
+        )
+        include_referer = forms.BooleanField(
+            label=_("Include referer"),
+            required=False,
+            initial=True,
+            help_text=_("Include the referring page URL in the payload."),
+        )
+        custom_metadata = forms.JSONField(
+            label=_("Custom metadata (JSON)"),
+            required=False,
+            widget=forms.Textarea(attrs={"rows": 3}),
+            help_text=_("Additional custom data to include, as a JSON object."),
+        )
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # Only required when this action is actually selected on the form.
+            if args:
+                self.fields["webhook_config"].required = get_hash(
+                    WebhookAction
+                ) in args[0].get("form_actions", [])
+
+        def clean_custom_metadata(self):
+            value = self.cleaned_data.get("custom_metadata")
+            if value in (None, ""):
+                return {}
+            if not isinstance(value, dict):
+                raise forms.ValidationError(_("Custom metadata must be a JSON object."))
+            return value
+
+        @staticmethod
+        def _resolve_config_id(param):
+            """Extract a configuration id from an entangled parameter value."""
+            if param is None:
+                return None
+            if isinstance(param, dict):
+                return param.get("pk") or param.get("id")
+            if hasattr(param, "pk"):
+                return param.pk
+            return param
+
+        def execute(self, form, request):
+            from .webhook_tasks import enqueue_webhook_submission
+
+            config_id = self._resolve_config_id(
+                self.get_parameter(form, "webhook_config")
+            )
+            if not config_id:
+                logger.error("No webhook configuration selected for webhook action")
+                return
+
+            try:
+                webhook_config = WebhookConfiguration.objects.get(
+                    id=config_id, active=True
+                )
+            except (WebhookConfiguration.DoesNotExist, ValueError, TypeError):
+                logger.error(
+                    "Webhook configuration %s not found or inactive", config_id
+                )
+                return
+
+            metadata = dict(self.get_parameter(form, "custom_metadata") or {})
+            if self.get_parameter(form, "include_user_agent"):
+                user_agent = request.headers.get("User-Agent")
+                if user_agent:
+                    metadata["user_agent"] = user_agent
+            if self.get_parameter(form, "include_referer"):
+                referer = request.headers.get("Referer")
+                if referer:
+                    metadata["referer"] = referer
+
+            forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+            if forwarded_for:
+                metadata["ip_address"] = forwarded_for.split(",")[0].strip()
+            elif request.META.get("REMOTE_ADDR"):
+                metadata["ip_address"] = request.META["REMOTE_ADDR"]
+
+            submission = WebhookSubmission.objects.create(
+                webhook_config=webhook_config,
+                form_name=get_option(form, "form_name") or "unnamed_form",
+                form_user=None if request.user.is_anonymous else request.user,
+                form_data=dict(form.cleaned_data),
+                metadata=metadata,
+            )
+            logger.info(
+                "Created webhook submission %s for form '%s'",
+                submission.id,
+                submission.form_name,
+            )
+
+            # A delivery failure must never break the user's submission.
+            try:
+                enqueue_webhook_submission(submission.id)
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue webhook submission %s", submission.id
+                )

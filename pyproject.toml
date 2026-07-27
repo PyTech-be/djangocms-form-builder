@@ -52,11 +52,15 @@ dependencies = [
 reCaptcha = [
     "django-recaptcha",
 ]
+webhook = [
+    "requests>=2.0",
+]
 tests = [
     "easy-thumbnails",
     "django-filer",
     "djangocms-text",
     "djangocms-link",
+    "requests>=2.0",
 ]
 altcha = [
     "django-altcha>=1.0.0",

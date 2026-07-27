@@ -45,6 +45,13 @@ FILE_FIELD_STORAGE = getattr(
     django_settings, "DJANGOCMS_FORM_BUILDER_FILE_FIELD_STORAGE", default_storage
 )
 
+# Dotted path to a callable ``dispatch(submission_id) -> None`` that hands
+# webhook delivery to a task queue. When empty, the "Submit to webhook" action
+# delivers in a background thread. See ``djangocms_form_builder.webhook_tasks``.
+WEBHOOK_DISPATCH = getattr(
+    django_settings, "DJANGOCMS_FORM_BUILDER_WEBHOOK_DISPATCH", ""
+)
+
 
 def render_factory(cls, theme_module, render_module):
     parents = tuple(

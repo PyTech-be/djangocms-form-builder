@@ -93,7 +93,7 @@ Actions
 
 Upon submission of a valid form actions can be performed.
 
-Four actions come with djangocms-form-builder comes with four actions built-in
+djangocms-form-builder comes with these actions built-in
 
 * **Save form submission** - Saves each form submission to the database. See the
   results in the admin interface.
@@ -102,6 +102,9 @@ Four actions come with djangocms-form-builder comes with four actions built-in
   successful form submission.
 * **Redirect after submission** - Specify a link to a page where the user is
   redirected after successful form submission.
+* **Submit to webhook** - Sends each submission to a configured webhook endpoint
+  (Make.com, Zapier, or any HTTP service). See `Webhook action`_ below. Only
+  available when the optional ``requests`` dependency is installed.
 
 Actions can be configured in the form plugin.
 
@@ -142,6 +145,64 @@ You can put these actions in your apps models.py file. Another options is your a
                     # Process form and request data, you can send an email to the person who filled the form
                     # Or admins though that functionality is available from the default SendMailAction
 
+
+
+Webhook action
+==============
+
+The **Submit to webhook** action posts each form submission as JSON to an HTTP
+endpoint - for example a `Make.com <https://www.make.com/>`_ or
+`Zapier <https://zapier.com/>`_ scenario, or your own service.
+
+The action requires the optional ``requests`` dependency::
+
+    python -m pip install "djangocms-form-builder[webhook]"
+
+Endpoints are managed as **Webhook configuration** objects in the Django admin
+(URL, authentication, retry and timeout settings). Once a configuration exists,
+select **Submit to webhook** in the form plugin and pick the configuration.
+
+The endpoint receives a JSON payload of the following shape::
+
+    {
+      "form_name": "contact_form",
+      "form_data": {"name": "Jane Doe", "email": "jane@example.com"},
+      "submission_id": "3f7a...",
+      "submitted_at": "2024-08-05T15:30:00+00:00",
+      "user": {"id": 1, "username": "jane", "email": "jane@example.com", ...},
+      "metadata": {"user_agent": "...", "referer": "...", "ip_address": "..."}
+    }
+
+The ``user`` and ``metadata`` keys are only included when enabled on the webhook
+configuration. Per-form options let you toggle whether the user agent and
+referer are collected and add custom metadata as a JSON object.
+
+Delivery, retries and monitoring
+---------------------------------
+
+Submissions are delivered asynchronously so a slow or failing endpoint never
+blocks the visitor's submission. Every attempt is recorded (with credentials
+redacted) as a **Webhook log**, and each submission tracks its status
+(*pending*, *processing*, *success*, *failed*, *retry exhausted*). Failed
+deliveries are retried with capped exponential backoff up to the configured
+number of retries.
+
+By default deliveries run in a background thread, which keeps submission
+non-blocking without extra infrastructure but offers no durability if the
+process is killed mid-delivery. For at-least-once delivery, either:
+
+* run the ``process_webhook_queue`` management command periodically (e.g. from
+  cron) to (re)send pending and retry-due submissions::
+
+      python manage.py process_webhook_queue
+
+  Use ``--dry-run`` to preview, ``--status pending|failed|all`` to filter, and
+  ``--max-submissions N`` to limit a run; or
+
+* hand delivery to a task queue by pointing
+  ``DJANGOCMS_FORM_BUILDER_WEBHOOK_DISPATCH`` at a callable
+  ``dispatch(submission_id) -> None`` that enqueues
+  ``djangocms_form_builder.webhook_tasks.process_webhook_submission_sync``.
 
 
 Using (existing) Django forms with djangocms-form-builder

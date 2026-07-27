@@ -14,6 +14,11 @@ from .entry_model import FormEntry  # NoQA
 from .fields import AttributesField
 from .helpers import coerce_decimal, coerce_int, mark_safe_lazy
 from .upload_form_fields import MultipleUploadedFilesField, ValidatedFileField
+from .webhook_models import (  # NoQA
+    WebhookConfiguration,
+    WebhookLog,
+    WebhookSubmission,
+)
 
 MAX_LENGTH = 256
 

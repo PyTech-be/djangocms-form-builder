@@ -2,6 +2,19 @@
 Changelog
 =========
 
+unreleased
+==========
+
+* feat: Add a "Submit to webhook" form action that posts submissions as JSON to
+  an HTTP endpoint (Make.com, Zapier, or any service). Endpoints are managed in
+  the admin with configurable authentication, timeout and retry settings;
+  deliveries are asynchronous with capped exponential-backoff retries and
+  per-attempt logging. Available with the optional ``requests`` dependency
+  (``djangocms-form-builder[webhook]``). A ``process_webhook_queue`` management
+  command (re)sends pending and retry-due submissions for at-least-once
+  delivery, and the async backend is pluggable via
+  ``DJANGOCMS_FORM_BUILDER_WEBHOOK_DISPATCH``.
+
 0.6.0 (2026-07-23)
 ==================
 
