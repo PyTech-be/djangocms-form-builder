@@ -103,8 +103,8 @@ djangocms-form-builder comes with these actions built-in
 * **Redirect after submission** - Specify a link to a page where the user is
   redirected after successful form submission.
 * **Submit to webhook** - Sends each submission to a configured webhook endpoint
-  (Make.com, Zapier, or any HTTP service). See `Webhook action`_ below. Only
-  available when the optional ``requests`` dependency is installed.
+  (Make.com, Zapier, or any HTTP service). See `Webhook action`_ below. Enabled
+  with the optional ``[webhook]`` extra.
 
 Actions can be configured in the form plugin.
 
@@ -154,9 +154,15 @@ The **Submit to webhook** action posts each form submission as JSON to an HTTP
 endpoint - for example a `Make.com <https://www.make.com/>`_ or
 `Zapier <https://zapier.com/>`_ scenario, or your own service.
 
-The action requires the optional ``requests`` dependency::
+Enable the action with the optional ``[webhook]`` extra::
 
     python -m pip install "djangocms-form-builder[webhook]"
+
+This pulls in `niquests <https://niquests.readthedocs.io/>`_ (the HTTP client)
+and, on Django versions before 6.0, the `django-tasks
+<https://github.com/RealOrangeOne/django-tasks>`_ backport of Django's Tasks
+framework (Django 6.0+ ships it as ``django.tasks``). Configure a task backend
+via the standard ``TASKS`` setting; see `Delivery, retries and monitoring`_.
 
 Endpoints are managed as **Webhook configuration** objects in the Django admin
 (URL, authentication, retry and timeout settings). Once a configuration exists,
@@ -180,29 +186,31 @@ referer are collected and add custom metadata as a JSON object.
 Delivery, retries and monitoring
 ---------------------------------
 
-Submissions are delivered asynchronously so a slow or failing endpoint never
-blocks the visitor's submission. Every attempt is recorded (with credentials
-redacted) as a **Webhook log**, and each submission tracks its status
-(*pending*, *processing*, *success*, *failed*, *retry exhausted*). Failed
-deliveries are retried with capped exponential backoff up to the configured
-number of retries.
+Submissions are enqueued on Django's Tasks framework and delivered by a worker,
+so a slow or failing endpoint never blocks the visitor's submission. Every
+attempt is recorded (with credentials redacted) as a **Webhook log**, and each
+submission tracks its status (*pending*, *processing*, *success*, *failed*,
+*retry exhausted*). Failed deliveries are retried with capped exponential
+backoff up to the configured number of retries.
 
-By default deliveries run in a background thread, which keeps submission
-non-blocking without extra infrastructure but offers no durability if the
-process is killed mid-delivery. For at-least-once delivery, either:
+**Task backend.** Which queue is used is entirely up to your ``TASKS`` setting -
+the package only enqueues. With the default ``ImmediateBackend`` the delivery
+runs inline (fine for development); for true background processing configure a
+durable backend (e.g. a database or Redis backend) and run its worker. See the
+`Django Tasks documentation <https://docs.djangoproject.com/en/dev/topics/tasks/>`_.
 
-* run the ``process_webhook_queue`` management command periodically (e.g. from
-  cron) to (re)send pending and retry-due submissions::
+**At-least-once delivery.** Run the ``process_webhook_queue`` management command
+periodically (e.g. from cron) to (re)send pending and retry-due submissions::
 
-      python manage.py process_webhook_queue
+    python manage.py process_webhook_queue
 
-  Use ``--dry-run`` to preview, ``--status pending|failed|all`` to filter, and
-  ``--max-submissions N`` to limit a run; or
+Use ``--dry-run`` to preview, ``--status pending|failed|all`` to filter, and
+``--max-submissions N`` to limit a run.
 
-* hand delivery to a task queue by pointing
-  ``DJANGOCMS_FORM_BUILDER_WEBHOOK_DISPATCH`` at a callable
-  ``dispatch(submission_id) -> None`` that enqueues
-  ``djangocms_form_builder.webhook_tasks.process_webhook_submission_sync``.
+**HTTP client.** Delivery uses ``niquests`` when installed, otherwise the
+standard library. To use a different client (e.g. httpx), point
+``DJANGOCMS_FORM_BUILDER_WEBHOOK_HTTP_SENDER`` at a callable
+``sender(url, *, body, headers, timeout) -> (status_code, response_text)``.
 
 
 Using (existing) Django forms with djangocms-form-builder

@@ -53,14 +53,18 @@ reCaptcha = [
     "django-recaptcha",
 ]
 webhook = [
-    "requests>=2.0",
+    "niquests",
+    # Django 6.0+ ships the Tasks framework in core; earlier versions use the
+    # backport. It declares no upper Django pin, so it is safe on 6.0 too.
+    "django-tasks; python_version >= '3.10'",
 ]
 tests = [
     "easy-thumbnails",
     "django-filer",
     "djangocms-text",
     "djangocms-link",
-    "requests>=2.0",
+    "niquests",
+    "django-tasks",
 ]
 altcha = [
     "django-altcha>=1.0.0",

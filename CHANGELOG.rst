@@ -9,11 +9,14 @@ unreleased
   an HTTP endpoint (Make.com, Zapier, or any service). Endpoints are managed in
   the admin with configurable authentication, timeout and retry settings;
   deliveries are asynchronous with capped exponential-backoff retries and
-  per-attempt logging. Available with the optional ``requests`` dependency
-  (``djangocms-form-builder[webhook]``). A ``process_webhook_queue`` management
-  command (re)sends pending and retry-due submissions for at-least-once
-  delivery, and the async backend is pluggable via
-  ``DJANGOCMS_FORM_BUILDER_WEBHOOK_DISPATCH``.
+  per-attempt logging. Enable with the optional ``[webhook]`` extra. Delivery
+  is enqueued on Django's Tasks framework (``django.tasks`` on Django 6.0+, the
+  ``django-tasks`` backport before) so the queue backend is chosen through the
+  standard ``TASKS`` setting. HTTP uses ``niquests`` when installed and falls
+  back to the standard library, and is overridable via
+  ``DJANGOCMS_FORM_BUILDER_WEBHOOK_HTTP_SENDER``. A ``process_webhook_queue``
+  management command (re)sends pending and retry-due submissions for
+  at-least-once delivery.
 
 0.6.0 (2026-07-23)
 ==================

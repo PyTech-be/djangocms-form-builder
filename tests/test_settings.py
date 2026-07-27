@@ -43,6 +43,23 @@ try:  # V4 test?
 except ImportError:  # Nope
     pass
 
+# Django's Tasks framework: core on Django 6.0+, the django-tasks backport
+# before. Configure it so the webhook action can enqueue during tests.
+try:
+    import django.tasks  # noqa: F401  (Django >= 6.0)
+
+    TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+except ImportError:
+    try:
+        import django_tasks  # noqa: F401  (backport for Django < 6.0)
+
+        INSTALLED_APPS += ["django_tasks"]
+        TASKS = {
+            "default": {"BACKEND": "django_tasks.backends.immediate.ImmediateBackend"}
+        }
+    except ImportError:
+        pass
+
 MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",

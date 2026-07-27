@@ -1,3 +1,4 @@
+import io
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
@@ -217,13 +218,9 @@ class WebhookProcessorTests(TestCase):
         )
         self.processor = WebhookProcessor()
 
-    @patch("djangocms_form_builder.webhook_tasks.requests.Session.post")
-    def test_success(self, mock_post):
-        response = MagicMock()
-        response.status_code = 200
-        response.text = '{"status": "ok"}'
-        response.headers = {"Content-Type": "application/json"}
-        mock_post.return_value = response
+    @patch("djangocms_form_builder.webhook_tasks.send_webhook")
+    def test_success(self, mock_send):
+        mock_send.return_value = (200, '{"status": "ok"}')
 
         self.assertTrue(self.processor.process_submission(str(self.submission.id)))
 
@@ -237,14 +234,13 @@ class WebhookProcessorTests(TestCase):
         self.assertTrue(log.is_success)
         # Credentials must never be persisted in the log.
         self.assertEqual(log.request_headers.get("Authorization"), "[REDACTED]")
+        # The seam receives the auth header but the log never does.
+        _, kwargs = mock_send.call_args
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret-token")
 
-    @patch("djangocms_form_builder.webhook_tasks.requests.Session.post")
-    def test_failure_schedules_retry(self, mock_post):
-        response = MagicMock()
-        response.status_code = 500
-        response.text = "Internal Server Error"
-        response.headers = {}
-        mock_post.return_value = response
+    @patch("djangocms_form_builder.webhook_tasks.send_webhook")
+    def test_failure_schedules_retry(self, mock_send):
+        mock_send.return_value = (500, "Internal Server Error")
 
         self.assertFalse(self.processor.process_submission(str(self.submission.id)))
 
@@ -254,13 +250,20 @@ class WebhookProcessorTests(TestCase):
         self.assertIsNotNone(self.submission.next_retry_at)
         self.assertFalse(WebhookLog.objects.get(submission=self.submission).is_success)
 
-    @patch("djangocms_form_builder.webhook_tasks.requests.Session.post")
-    def test_retry_exhausted(self, mock_post):
-        response = MagicMock()
-        response.status_code = 500
-        response.text = "err"
-        response.headers = {}
-        mock_post.return_value = response
+    @patch("djangocms_form_builder.webhook_tasks.send_webhook")
+    def test_transport_error_is_failure(self, mock_send):
+        from djangocms_form_builder.webhook_http import WebhookTransportError
+
+        mock_send.side_effect = WebhookTransportError("connection refused")
+
+        self.assertFalse(self.processor.process_submission(str(self.submission.id)))
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.status, WebhookSubmissionStatus.FAILED)
+        self.assertIn("connection refused", self.submission.error_message)
+
+    @patch("djangocms_form_builder.webhook_tasks.send_webhook")
+    def test_retry_exhausted(self, mock_send):
+        mock_send.return_value = (500, "err")
 
         self.config.max_retries = 1
         self.config.save()
@@ -308,6 +311,121 @@ class ProcessPendingTests(TestCase):
         self.assertEqual(mock_process.call_count, 2)
 
 
+class SendWebhookSeamTests(TestCase):
+    """The pluggable HTTP transport seam."""
+
+    def test_stdlib_sender_success(self):
+        from djangocms_form_builder import webhook_http
+
+        captured = {}
+
+        class FakeResponse:
+            status = 201
+
+            def __init__(self):
+                self.headers = MagicMock()
+                self.headers.get_content_charset.return_value = "utf-8"
+
+            def read(self):
+                return b'{"ok": true}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            captured["url"] = request.full_url
+            captured["body"] = request.data
+            captured["headers"] = dict(request.headers)
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        with patch.object(webhook_http.urllib.request, "urlopen", fake_urlopen):
+            status, text = webhook_http._send_with_stdlib(
+                "https://hook.example.com/x",
+                body='{"a": 1}',
+                headers={"Content-Type": "application/json", "X-Test": "1"},
+                timeout=30,
+            )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(text, '{"ok": true}')
+        self.assertEqual(captured["body"], b'{"a": 1}')
+        self.assertEqual(captured["timeout"], 30)
+
+    def test_stdlib_sender_http_error_is_response(self):
+        from djangocms_form_builder import webhook_http
+
+        def raise_http_error(request, timeout=None):
+            raise webhook_http.urllib.error.HTTPError(
+                url=request.full_url,
+                code=502,
+                msg="Bad Gateway",
+                hdrs=None,
+                fp=io.BytesIO(b"upstream error"),
+            )
+
+        with patch.object(webhook_http.urllib.request, "urlopen", raise_http_error):
+            status, text = webhook_http._send_with_stdlib(
+                "https://hook.example.com/x",
+                body="{}",
+                headers={},
+                timeout=5,
+            )
+
+        self.assertEqual(status, 502)
+        self.assertEqual(text, "upstream error")
+
+    def test_stdlib_sender_connection_error_raises_transport(self):
+        from djangocms_form_builder import webhook_http
+
+        def raise_urlerror(request, timeout=None):
+            raise webhook_http.urllib.error.URLError("no route to host")
+
+        with patch.object(webhook_http.urllib.request, "urlopen", raise_urlerror):
+            with self.assertRaises(webhook_http.WebhookTransportError):
+                webhook_http._send_with_stdlib(
+                    "https://hook.example.com/x", body="{}", headers={}, timeout=5
+                )
+
+    def test_send_webhook_adds_content_type_and_serialises(self):
+        from djangocms_form_builder import webhook_http
+
+        calls = {}
+
+        def fake_sender(url, *, body, headers, timeout):
+            calls["url"] = url
+            calls["body"] = body
+            calls["headers"] = headers
+            calls["timeout"] = timeout
+            return (200, "ok")
+
+        original = webhook_http._sender
+        webhook_http._sender = fake_sender
+        try:
+            status, text = webhook_http.send_webhook(
+                "https://hook.example.com/x",
+                json={"a": 1},
+                headers={"X-Test": "1"},
+                timeout=12,
+            )
+        finally:
+            webhook_http._sender = original
+
+        self.assertEqual((status, text), (200, "ok"))
+        self.assertEqual(calls["headers"]["Content-Type"], "application/json")
+        self.assertEqual(calls["headers"]["X-Test"], "1")
+        self.assertEqual(calls["body"], '{"a": 1}')
+
+    def test_resolve_sender_prefers_niquests_when_available(self):
+        from djangocms_form_builder import webhook_http
+
+        # niquests is installed in the test env, so it must be preferred.
+        self.assertIs(webhook_http._resolve_sender(), webhook_http._send_with_niquests)
+
+
 class WebhookAdminTests(TestCase):
     def test_admin_registered(self):
         from django.contrib import admin
@@ -320,3 +438,10 @@ class WebhookAdminTests(TestCase):
         from django.core.management import get_commands
 
         self.assertIn("process_webhook_queue", get_commands())
+
+    def test_enqueue_uses_tasks_framework(self):
+        from djangocms_form_builder import webhook_tasks
+
+        with patch.object(webhook_tasks, "process_webhook_submission") as mock_task:
+            webhook_tasks.enqueue_webhook_submission("abc-123")
+        mock_task.enqueue.assert_called_once_with("abc-123")

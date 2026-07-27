@@ -45,11 +45,12 @@ FILE_FIELD_STORAGE = getattr(
     django_settings, "DJANGOCMS_FORM_BUILDER_FILE_FIELD_STORAGE", default_storage
 )
 
-# Dotted path to a callable ``dispatch(submission_id) -> None`` that hands
-# webhook delivery to a task queue. When empty, the "Submit to webhook" action
-# delivers in a background thread. See ``djangocms_form_builder.webhook_tasks``.
-WEBHOOK_DISPATCH = getattr(
-    django_settings, "DJANGOCMS_FORM_BUILDER_WEBHOOK_DISPATCH", ""
+# Optional dotted path to a callable
+# ``sender(url, *, body, headers, timeout) -> (int, str)`` used to deliver
+# webhooks. When empty, ``niquests`` is used if installed, otherwise the
+# standard library. See ``djangocms_form_builder.webhook_http``.
+WEBHOOK_HTTP_SENDER = getattr(
+    django_settings, "DJANGOCMS_FORM_BUILDER_WEBHOOK_HTTP_SENDER", ""
 )
 
 

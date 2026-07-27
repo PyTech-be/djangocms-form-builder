@@ -6,8 +6,8 @@ delivered asynchronously (see :mod:`djangocms_form_builder.webhook_tasks`).
 Each delivery attempt is recorded as a :class:`WebhookLog` for auditing.
 
 These models are always installed with djangocms-form-builder, but the action
-itself is only registered when the optional ``requests`` dependency is
-available (install ``djangocms-form-builder[webhook]``).
+itself is only registered when Django's Tasks framework is available (install
+``djangocms-form-builder[webhook]``).
 """
 
 import datetime

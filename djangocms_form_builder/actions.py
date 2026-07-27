@@ -359,25 +359,29 @@ if apps.is_installed("djangocms_link"):
             )
 
 
+# The webhook action delivers through Django's Tasks framework (django.tasks on
+# Django 6.0+, the django-tasks backport before). Register it only when that
+# framework is importable - see the [webhook] extra.
 try:
-    import requests  # noqa: F401 - optional dependency, see [webhook] extra
-
-    _has_requests = True
+    from django.tasks import task as _task  # noqa: F401
 except ModuleNotFoundError:
-    _has_requests = False
+    try:
+        from django_tasks import task as _task  # noqa: F401
+    except ModuleNotFoundError:
+        _task = None
 
 
-if _has_requests:
+if _task is not None:
     from .webhook_models import WebhookConfiguration, WebhookSubmission
 
     @register
     class WebhookAction(FormAction):
         """Send each submission to a configured webhook endpoint.
 
-        Deliveries are queued and processed asynchronously with retry logic and
-        per-attempt logging. Endpoints are managed as ``Webhook configuration``
-        objects in the admin. Requires the optional ``requests`` dependency
-        (install ``djangocms-form-builder[webhook]``).
+        Deliveries are enqueued on Django's Tasks framework and processed with
+        retry logic and per-attempt logging. Endpoints are managed as ``Webhook
+        configuration`` objects in the admin. Enable with
+        ``djangocms-form-builder[webhook]``.
         """
 
         verbose_name = _("Submit to webhook")
