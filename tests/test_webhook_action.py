@@ -1,5 +1,6 @@
 import io
 from datetime import timedelta
+from unittest import skipUnless
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -14,15 +15,33 @@ from djangocms_form_builder.webhook_models import (
     WebhookSubmission,
     WebhookSubmissionStatus,
 )
-from djangocms_form_builder.webhook_tasks import (
-    WebhookProcessor,
-    process_pending_submissions,
-)
+
+# The webhook action is only available when Django's Tasks framework is
+# installed (core on Django 6.0+, the django-tasks backport before). Skip the
+# suite gracefully when it is absent rather than erroring on import.
+try:
+    from djangocms_form_builder.webhook_tasks import (
+        WebhookProcessor,
+        process_pending_submissions,
+    )
+
+    WEBHOOK_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover - depends on optional extra
+    WEBHOOK_AVAILABLE = False
+    # Bound so class-body decorators (e.g. @patch.object(WebhookProcessor, ...))
+    # still resolve at import time; the classes themselves are skipped.
+    WebhookProcessor = None
+    process_pending_submissions = None
 
 User = get_user_model()
 
 
-class WebhookConfigurationTests(TestCase):
+@skipUnless(WEBHOOK_AVAILABLE, "Tasks framework (django-tasks) not installed")
+class WebhookTestMixin:
+    """Marks the webhook suite as requiring the optional [webhook] extra."""
+
+
+class WebhookConfigurationTests(WebhookTestMixin, TestCase):
     def setUp(self):
         self.config = WebhookConfiguration.objects.create(
             name="Test Webhook",
@@ -64,7 +83,7 @@ class WebhookConfigurationTests(TestCase):
         self.assertEqual(self.config.get_auth_headers(), {})
 
 
-class WebhookSubmissionModelTests(TestCase):
+class WebhookSubmissionModelTests(WebhookTestMixin, TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             username="testuser", email="test@example.com"
@@ -132,7 +151,7 @@ class WebhookSubmissionModelTests(TestCase):
         self.assertAlmostEqual(delay.total_seconds(), 24 * 60 * 60, delta=10)
 
 
-class WebhookActionTests(TestCase):
+class WebhookActionTests(WebhookTestMixin, TestCase):
     def setUp(self):
         self.config = WebhookConfiguration.objects.create(
             name="Test Webhook", webhook_url="https://hook.example.com/test123"
@@ -202,7 +221,7 @@ class WebhookActionTests(TestCase):
         mock_enqueue.assert_not_called()
 
 
-class WebhookProcessorTests(TestCase):
+class WebhookProcessorTests(WebhookTestMixin, TestCase):
     def setUp(self):
         self.config = WebhookConfiguration.objects.create(
             name="Test Webhook",
@@ -289,7 +308,7 @@ class WebhookProcessorTests(TestCase):
         self.assertEqual(self.submission.status, WebhookSubmissionStatus.FAILED)
 
 
-class ProcessPendingTests(TestCase):
+class ProcessPendingTests(WebhookTestMixin, TestCase):
     def setUp(self):
         self.config = WebhookConfiguration.objects.create(
             name="Test Webhook", webhook_url="https://hook.example.com/test123"
@@ -317,7 +336,7 @@ class ProcessPendingTests(TestCase):
         self.assertEqual(mock_process.call_count, 2)
 
 
-class SendWebhookSeamTests(TestCase):
+class SendWebhookSeamTests(WebhookTestMixin, TestCase):
     """The pluggable HTTP transport seam."""
 
     @staticmethod
@@ -445,7 +464,7 @@ class SendWebhookSeamTests(TestCase):
         self.assertIs(webhook_http._resolve_sender(), webhook_http._send_with_niquests)
 
 
-class WebhookAdminTests(TestCase):
+class WebhookAdminTests(WebhookTestMixin, TestCase):
     def test_admin_registered(self):
         from django.contrib import admin
 

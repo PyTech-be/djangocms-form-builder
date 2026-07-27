@@ -16,3 +16,7 @@ pre-commit
 svglib!=1.6.0
 django-entangled
 django-altcha
+# Webhook action: HTTP client and the Tasks framework backport (Django < 6.0).
+# The CI matrix runs Python >= 3.10, which django-tasks requires.
+niquests
+django-tasks
