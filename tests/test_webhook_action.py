@@ -220,7 +220,11 @@ class WebhookProcessorTests(TestCase):
 
     @patch("djangocms_form_builder.webhook_tasks.send_webhook")
     def test_success(self, mock_send):
-        mock_send.return_value = (200, '{"status": "ok"}')
+        mock_send.return_value = (
+            200,
+            '{"status": "ok"}',
+            {"Content-Type": "application/json", "X-Request-Id": "abc"},
+        )
 
         self.assertTrue(self.processor.process_submission(str(self.submission.id)))
 
@@ -232,6 +236,8 @@ class WebhookProcessorTests(TestCase):
         log = WebhookLog.objects.get(submission=self.submission)
         self.assertEqual(log.response_status, 200)
         self.assertTrue(log.is_success)
+        # Response headers are captured into the log.
+        self.assertEqual(log.response_headers.get("X-Request-Id"), "abc")
         # Credentials must never be persisted in the log.
         self.assertEqual(log.request_headers.get("Authorization"), "[REDACTED]")
         # The seam receives the auth header but the log never does.
@@ -240,7 +246,7 @@ class WebhookProcessorTests(TestCase):
 
     @patch("djangocms_form_builder.webhook_tasks.send_webhook")
     def test_failure_schedules_retry(self, mock_send):
-        mock_send.return_value = (500, "Internal Server Error")
+        mock_send.return_value = (500, "Internal Server Error", {})
 
         self.assertFalse(self.processor.process_submission(str(self.submission.id)))
 
@@ -263,7 +269,7 @@ class WebhookProcessorTests(TestCase):
 
     @patch("djangocms_form_builder.webhook_tasks.send_webhook")
     def test_retry_exhausted(self, mock_send):
-        mock_send.return_value = (500, "err")
+        mock_send.return_value = (500, "err", {})
 
         self.config.max_retries = 1
         self.config.save()
@@ -314,17 +320,26 @@ class ProcessPendingTests(TestCase):
 class SendWebhookSeamTests(TestCase):
     """The pluggable HTTP transport seam."""
 
+    @staticmethod
+    def _message(pairs):
+        from email.message import Message
+
+        message = Message()
+        for key, value in pairs:
+            message[key] = value
+        return message
+
     def test_stdlib_sender_success(self):
         from djangocms_form_builder import webhook_http
 
         captured = {}
+        headers_message = self._message(
+            [("Content-Type", "application/json"), ("X-Request-Id", "abc")]
+        )
 
         class FakeResponse:
             status = 201
-
-            def __init__(self):
-                self.headers = MagicMock()
-                self.headers.get_content_charset.return_value = "utf-8"
+            headers = headers_message
 
             def read(self):
                 return b'{"ok": true}'
@@ -343,7 +358,7 @@ class SendWebhookSeamTests(TestCase):
             return FakeResponse()
 
         with patch.object(webhook_http.urllib.request, "urlopen", fake_urlopen):
-            status, text = webhook_http._send_with_stdlib(
+            status, text, resp_headers = webhook_http._send_with_stdlib(
                 "https://hook.example.com/x",
                 body='{"a": 1}',
                 headers={"Content-Type": "application/json", "X-Test": "1"},
@@ -352,23 +367,26 @@ class SendWebhookSeamTests(TestCase):
 
         self.assertEqual(status, 201)
         self.assertEqual(text, '{"ok": true}')
+        self.assertEqual(resp_headers.get("X-Request-Id"), "abc")
         self.assertEqual(captured["body"], b'{"a": 1}')
         self.assertEqual(captured["timeout"], 30)
 
     def test_stdlib_sender_http_error_is_response(self):
         from djangocms_form_builder import webhook_http
 
+        error_headers = self._message([("X-Error", "boom")])
+
         def raise_http_error(request, timeout=None):
             raise webhook_http.urllib.error.HTTPError(
                 url=request.full_url,
                 code=502,
                 msg="Bad Gateway",
-                hdrs=None,
+                hdrs=error_headers,
                 fp=io.BytesIO(b"upstream error"),
             )
 
         with patch.object(webhook_http.urllib.request, "urlopen", raise_http_error):
-            status, text = webhook_http._send_with_stdlib(
+            status, text, resp_headers = webhook_http._send_with_stdlib(
                 "https://hook.example.com/x",
                 body="{}",
                 headers={},
@@ -377,6 +395,7 @@ class SendWebhookSeamTests(TestCase):
 
         self.assertEqual(status, 502)
         self.assertEqual(text, "upstream error")
+        self.assertEqual(resp_headers.get("X-Error"), "boom")
 
     def test_stdlib_sender_connection_error_raises_transport(self):
         from djangocms_form_builder import webhook_http
@@ -400,12 +419,12 @@ class SendWebhookSeamTests(TestCase):
             calls["body"] = body
             calls["headers"] = headers
             calls["timeout"] = timeout
-            return (200, "ok")
+            return (200, "ok", {})
 
         original = webhook_http._sender
         webhook_http._sender = fake_sender
         try:
-            status, text = webhook_http.send_webhook(
+            status, text, _headers = webhook_http.send_webhook(
                 "https://hook.example.com/x",
                 json={"a": 1},
                 headers={"X-Test": "1"},

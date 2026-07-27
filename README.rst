@@ -210,7 +210,7 @@ Use ``--dry-run`` to preview, ``--status pending|failed|all`` to filter, and
 **HTTP client.** Delivery uses ``niquests`` when installed, otherwise the
 standard library. To use a different client (e.g. httpx), point
 ``DJANGOCMS_FORM_BUILDER_WEBHOOK_HTTP_SENDER`` at a callable
-``sender(url, *, body, headers, timeout) -> (status_code, response_text)``.
+``sender(url, *, body, headers, timeout) -> (status_code, response_text, response_headers)``.
 
 
 Using (existing) Django forms with djangocms-form-builder

@@ -1,15 +1,15 @@
 """Pluggable HTTP transport for the webhook action.
 
 All webhook delivery goes through :func:`send_webhook`, a thin seam that posts a
-JSON body and returns ``(status_code, response_text)``. This keeps the feature
-free of any hard HTTP-client dependency: the default transport uses
-`niquests <https://niquests.readthedocs.io/>`_ when it is installed (a drop-in,
-maintained ``requests`` replacement) and otherwise falls back to the standard
-library's :mod:`urllib.request`.
+JSON body and returns ``(status_code, response_text, response_headers)``. This
+keeps the feature free of any hard HTTP-client dependency: the default transport
+uses `niquests <https://niquests.readthedocs.io/>`_ when it is installed (a
+drop-in, maintained ``requests`` replacement) and otherwise falls back to the
+standard library's :mod:`urllib.request`.
 
 Advanced users can point ``DJANGOCMS_FORM_BUILDER_WEBHOOK_HTTP_SENDER`` at their
-own callable ``sender(url, *, body, headers, timeout) -> (int, str)`` to use
-httpx or any other client.
+own callable ``sender(url, *, body, headers, timeout) -> (int, str, dict)`` to
+use httpx or any other client.
 """
 
 import json as json_module
@@ -45,7 +45,7 @@ def _send_with_niquests(url, *, body, headers, timeout):
         )
     except niquests.exceptions.RequestException as exc:
         raise WebhookTransportError(str(exc)) from exc
-    return response.status_code, response.text or ""
+    return response.status_code, response.text or "", dict(response.headers)
 
 
 def _send_with_stdlib(url, *, body, headers, timeout):
@@ -56,14 +56,15 @@ def _send_with_stdlib(url, *, body, headers, timeout):
         with urllib.request.urlopen(request, timeout=timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             text = response.read().decode(charset, errors="replace")
-            return response.status, text
+            return response.status, text, dict(response.headers.items())
     except urllib.error.HTTPError as exc:
         # An HTTP error status is still a response, not a transport failure.
         charset = (
             exc.headers.get_content_charset() or "utf-8" if exc.headers else "utf-8"
         )
         text = exc.read().decode(charset, errors="replace")
-        return exc.code, text
+        response_headers = dict(exc.headers.items()) if exc.headers else {}
+        return exc.code, text, response_headers
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise WebhookTransportError(str(exc)) from exc
 
@@ -80,11 +81,12 @@ def _resolve_sender():
 
 
 def send_webhook(url, *, json, headers, timeout):
-    """POST ``json`` to ``url`` and return ``(status_code, response_text)``.
+    """POST ``json`` to ``url``.
 
-    ``headers`` should contain auth/user-agent headers; ``Content-Type:
-    application/json`` is added automatically. Raises
-    :class:`WebhookTransportError` when no HTTP response could be obtained.
+    Returns ``(status_code, response_text, response_headers)``. ``headers``
+    should contain auth/user-agent headers; ``Content-Type: application/json``
+    is added automatically. Raises :class:`WebhookTransportError` when no HTTP
+    response could be obtained.
     """
     global _sender
     if _sender is None:

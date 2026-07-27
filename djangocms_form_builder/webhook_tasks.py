@@ -130,7 +130,7 @@ class WebhookProcessor:
                 submission.id,
                 config.webhook_url,
             )
-            status, body = send_webhook(
+            status, body, response_headers = send_webhook(
                 config.webhook_url,
                 json=payload,
                 headers=headers,
@@ -138,6 +138,7 @@ class WebhookProcessor:
             )
             log_entry.duration_ms = int((time.monotonic() - start_time) * 1000)
             log_entry.response_status = status
+            log_entry.response_headers = response_headers
             log_entry.response_body = body[:MAX_LOGGED_RESPONSE_BODY]
 
             submission.last_response_status = status
